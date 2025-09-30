@@ -1,0 +1,61 @@
+receivers:
+  solace:
+    # AMQP 1.0 endpoint INSIDE the Docker network (no host publishing required)
+    broker: [solace-broker:5672]
+    queue: queue://#telemetry-dt-profile
+
+    auth:
+      sasl_plain:
+        # username: "#telemetry-dt-profile"
+        # password: "${env:SOLACE_PASSWORD:-}"   # leave empty if your telemetry user has no password
+        username: otel-receiver
+        password: P@ss1234
+
+    # 5672 is plaintext; set true. If you switch to 5671 (TLS), set this to false.
+    tls:
+      insecure: true
+      insecure_skip_verify: true
+
+processors:
+  attributes:
+    actions:
+      - key: service.name
+        action: upsert
+        value: "solace-broker"
+      - key: env
+        action: upsert
+        value: "dev"
+      - key: deployment.environment
+        action: upsert
+        value: "dev"
+
+exporters:
+  #Send OTel data to the Datadog Agent's OTLP gRPC endpoint
+  otlp:
+    endpoint: dd-agent:4317
+    tls:
+      insecure: true
+
+  # === Option B: direct to Datadog backend ===
+  # datadog:
+  #   api:
+  #     key: {DD_API_KEY}
+  #     # site: datadoghq.com
+  debug:
+    verbosity: detailed
+
+  # === Option C: local Jaeger (for quick testing) ===
+  # jaeger:
+  #   endpoint: ${JAEGER_GRPC_ENDPOINT:-jaeger:14250}
+  #   tls:
+  #     insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [solace]
+      processors: [attributes]
+      exporters: [otlp, debug]
+  telemetry:
+    logs:
+      level: "debug"

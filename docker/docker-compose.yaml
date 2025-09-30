@@ -1,0 +1,209 @@
+name: HKJC-SOLACE-POC
+services:
+  solace-broker:
+    image: solace/solace-pubsub-standard:10.25.0
+    container_name: solace-broker
+    shm_size: "1g"                           # per Solace docs
+    environment:
+      - username_admin_globalaccesslevel=${SOLACE_USERNAME}
+      - username_admin_password=${SOLACE_PASSWORD}
+      - service_enable_mqtt=true
+      - service_enable_web_transport=true
+      - system_scaling_maxconnectioncount=1000
+      - messagevpn_default_service_amqp_port=5672       
+    ports:
+      - "8080:8080"                          # PubSub+ Manager / SEMP
+      - "55555:55555"                        # SMF (JMS/JCSMP default)
+      # - "51337:51337"
+      - "5672:5672"                       # AMQP
+      - "9000:9000"                       # REST
+      - "8008:8008"                         # Web transport (WebSockets)
+      - "1883:1883"                         # MQTT
+      - "8883:8883"                         # MQTT (tls)
+      - "8000:8000"                         # MQTT over WebSocket (ws)
+      - "8443:8443"                         # MQTT over WebSocket (wss)
+    volumes:
+      - solace-data:/var/lib/solace
+    networks:
+      - solace-poc
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080 > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  hkjc-lm-solace-subscriber-solacelib:
+    image: hkjc-lm-solace-subscriber-solacelib:0.2.1
+    container_name: hkjc-lm-solace-subscriber-solacelib
+    environment:
+      #### Environment Variables for DD Tracer ####
+      - DD_AGENT_HOST=dd-agent
+      - DD_TRACE_DEBUG=false
+      - DD_DYNAMIC_INSTRUMENTATION_ENABLED=TRUE
+      - DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED=true
+      - DD_TRACE_RATE_LIMIT=500
+    ports:
+      - "9092:24680"
+    networks:
+      - solace-poc
+    # Options: "jms-properties" (follow publisher trace) or "headers" (follow Solace trace)
+    # Options: --app.queue.name=hkjc-poc-queue-2 OR poc/hkjc/updates/demo
+    #### Java options for DD tracer ####       
+    command: >
+      java -javaagent:/app/dd-java-agent.jar
+      -Ddd.profiling.enabled=true
+      -XX:FlightRecorderOptions=stackdepth=256
+      -Ddd.service=Testapp-hkjc-lm-solace-subscriber-solacelib
+      -Ddd.env=DEV
+      -Ddd.version=0.2.1
+      -Ddd.trace.propagation.style=tracecontext
+      -Ddd.trace.otel.enabled=true
+      -Ddd.dbm.propagation.mode=full
+      -Ddd.dbm.trace_prepared_statements=true
+      -Ddd.integration.jdbc-datasource.enabled=true
+      -Ddd.tags=HKJC_Tier:Testapp-hkjc-lm-solace-subscriber-solacelib,HKJC_HKLM_Service:Service
+      -jar /app/hkjc-lm-solace-subscriber-solacelib.war
+      --solace.jms.host=smf://solace-broker:55555
+      --solace.jms.host=smf://localhost:55555
+      --solace.jms.msgVpn=default
+      --solace.jms.clientUsername=app-sub
+      --solace.jms.clientPassword=${SOLACE_CLIENT_PASSWORD}
+      --app.queue.name=hkjc-poc-queue-2
+      --itemListenerDelay=15000
+      --trace.context.source=headers
+    depends_on:
+      dd-agent:
+        condition: service_started
+      solace-broker:
+        condition: service_healthy
+
+  hkjc-lm-solace-publisher-allinone:  ## supports JMS and MQTT calls
+    image: hkjc-lm-solace-publisher-allinone:0.2.1
+    container_name: hkjc-lm-solace-publisher-allinone
+    environment:
+      #### Environment Variables for DD Tracer ####
+      - DD_AGENT_HOST=dd-agent
+      - DD_TRACE_DEBUG=false
+      - DD_DYNAMIC_INSTRUMENTATION_ENABLED=TRUE
+      - DD_TRACE_REMOVE_INTEGRATION_SERVICE_NAMES_ENABLED=true
+      - DD_TRACE_RATE_LIMIT=500
+    ports:
+      - "9091:13579"
+    networks:
+      - solace-poc
+    
+    #### Java options for DD tracer ####       
+    command: >
+      java -javaagent:/app/dd-java-agent.jar
+      -Ddd.profiling.enabled=true
+      -XX:FlightRecorderOptions=stackdepth=256
+      -Ddd.service=Testapp-hkjc-lm-solace-publisher-allinone
+      -Ddd.env=DEV
+      -Ddd.version=0.2.1
+      -Ddd.trace.propagation.style=tracecontext
+      -Ddd.trace.otel.enabled=true
+      -Ddd.dbm.propagation.mode=full
+      -Ddd.dbm.trace_prepared_statements=true
+      -Ddd.integration.jdbc-datasource.enabled=true
+      -Ddd.tags=HKJC_Tier:Testapp-hkjc-lm-solace-publisher-allinone,HKJC_HKLM_Service:Service
+      -jar /app/hkjc-lm-solace-publisher-mqtt.war
+      --mqtt.broker.url=tcp://solace-broker:1883
+      --mqtt.broker.username=app-pub
+      --mqtt.broker.password=${SOLACE_CLIENT_PASSWORD}
+      --mqtt.client.id=spring-boot-demo
+      --mqtt.topic.default=poc/hkjc/updates/demo
+      --mqtt.message.json={"message@MQTT":"Hello subscriber!!!"}      
+      --solace.jms.host=smf://solace-broker:55555
+      --solace.jms.msgVpn=default
+      --solace.jms.clientUsername=app-pub
+      --solace.jms.clientPassword=${SOLACE_CLIENT_PASSWORD}
+      --solace.jms.directTransport=false
+      --mqtt.delay=10000
+      --jms.delay=10000
+
+    depends_on:
+      dd-agent:
+        condition: service_started
+      solace-broker:
+        condition: service_healthy
+
+  dd-agent:
+    cgroup: host
+    pid: host
+    container_name: dd-agent
+    environment:
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=datadoghq.com
+      - DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_GRPC_ENDPOINT=0.0.0.0:4317
+      - DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=0.0.0.0:4318
+      - DD_LOGS_INJECTION=true
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      # - DD_OTLP_CONFIG_LOGS_ENABLED=true
+      - DD_APM_ENABLED=true
+      - DD_APM_RECEIVER_PORT=8126
+      - DD_APM_MAX_TPS=5000
+      - DD_APM_TARGET_TPS=5000
+      - DD_APM_NON_LOCAL_TRAFFIC=true # Receive APM data from other containers
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true # Receive metrics from other containers
+      - DD_APM_RECEIVER_SOCKET=/opt/datadog/apm/inject/run/apm.socket
+      - DD_PROCESS_AGENT_ENABLED=true
+      #- DD_SYSTEM_PROBE_NETWORK_ENABLED=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./conf/db_monitoring_conf.yaml:/conf.d/postgres.d/conf.yaml # Enable Postgre DB monitoring
+    ports:
+      - 4317:4317
+      - 4318:4318
+    image: gcr.io/datadoghq/agent:latest
+    cap_add:
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - SYS_PTRACE
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+      - IPC_LOCK
+      - CHOWN
+    security_opt:
+      - apparmor:unconfined
+    networks:
+      - solace-poc
+
+  otel-collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    command: ["--config=/etc/otelcol/otel-collector.yaml"]
+    environment:
+      # AMQP 1.0 endpoint to your broker (inside Docker network)
+      - SOLACE_AMQP_HOST=${SOLACE_AMQP_HOST:-solace-broker:5672}
+      - SOLACE_TLS_INSECURE=${SOLACE_TLS_INSECURE:-true}
+      # Telemetry username password if required (often empty)
+      - SOLACE_USERNAME=${SOLACE_USERNAME}
+      - SOLACE_PASSWORD=${SOLACE_PASSWORD}
+      # Where to send the traces (Datadog Agent OTLP gRPC)
+      - OTLP_EXPORTER_ENDPOINT=dd-agent:4317
+      - DD_API_KEY=${DD_API_KEY}
+      - DD_SITE=datadoghq.com
+      - OTEL_RESOURCE_ATTRIBUTES="deployment.environment=dev"
+      - OTEL_SERVICE_NAME="solace-broker"
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/otel-collector.yaml:ro
+    depends_on:
+      dd-agent:
+        condition: service_started
+      solace-broker:
+        condition: service_healthy
+    networks:
+      - solace-poc
+
+
+volumes:
+  solace-data:
+
+networks:
+  solace-poc:
