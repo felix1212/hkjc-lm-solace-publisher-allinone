@@ -1,6 +1,13 @@
-# Spring Boot MQTT Publisher Demo
+# Spring Boot MQTT & JMS Publisher Demo
 
-This Spring Boot application provides REST endpoints to publish messages to Solace via MQTT.
+This Spring Boot application provides REST endpoints to publish messages to Solace via both MQTT and JMS protocols with OpenTelemetry tracing support.
+
+## Features
+
+- **Dual Protocol Support**: MQTT and JMS messaging
+- **OpenTelemetry Integration**: Distributed tracing with W3C Trace Context propagation
+- **Configurable Delays**: Built-in delay options for easier trace observation
+- **Solace Integration**: Native support for Solace MQTT and JMS
 
 ## Configuration
 
@@ -9,88 +16,136 @@ The application is configured via `application.properties`:
 ```properties
 # MQTT Configuration
 mqtt.broker.url=tcp://localhost:1883
-mqtt.broker.username=
-mqtt.broker.password=
+mqtt.broker.username=app-pub
+mqtt.broker.password=P@ss1234
 mqtt.client.id=spring-boot-demo
-mqtt.topic.default=/poc/hkjc/updates/demo
+mqtt.topic.default=poc/hkjc/updates/demo
+mqtt.message.json={"message@MQTT":"Hello subscriber!!!"}
 mqtt.qos=1
 mqtt.retained=false
+mqtt.delay=0
+
+# JMS Configuration (Solace)
+solace.jms.host=smf://localhost:55555
+solace.jms.msgVpn=default
+solace.jms.clientUsername=app-pub
+solace.jms.clientPassword=P@ss1234
+solace.jms.directTransport=false
+jms.message.json={"message@JMS":"Hello JMS subscriber!!!"}
+jms.topic.default=poc/hkjc/updates/demo
+jms.delay=0
+
+# Server Configuration
+server.port=13579
 ```
 
 ## Endpoints
 
-### POST /api/publish
-Publish a message via POST request with JSON body.
+### GET /publishmqtt
+Publish a message via MQTT using the configured JSON message from `mqtt.message.json`.
 
-**Request Body:**
-```json
-"Your message here"
-```
-
-**Query Parameters:**
-- `topic` (optional): MQTT topic (defaults to `/poc/hkjc/updates/demo`)
-- `qos` (optional): Quality of Service 0, 1, or 2 (defaults to 1)
-- `retained` (optional): Retain message true/false (defaults to false)
+**Features:**
+- Uses MQTT v5 with user properties
+- Includes OpenTelemetry trace context propagation
+- Configurable delay via `mqtt.delay` property
 
 **Example:**
 ```bash
-curl -X POST "http://localhost:8080/api/publish" \
-  -H "Content-Type: application/json" \
-  -d "Hello from Spring Boot" \
-  --data-urlencode "topic=/custom/topic" \
-  --data-urlencode "qos=1" \
-  --data-urlencode "retained=false"
+curl "http://localhost:13579/publishmqtt"
 ```
 
-### GET /api/publish
-Publish a message via GET request with query parameters.
+**Response:**
+```
+Published JSON to MQTT with v5 user property 'json'.
+```
 
-**Query Parameters:**
-- `message` (optional): Message to publish (defaults to "Hello from Spring Boot MQTT Publisher")
-- `topic` (optional): MQTT topic (defaults to configured default topic)
-- `qos` (optional): Quality of Service 0, 1, or 2 (defaults to 1)
-- `retained` (optional): Retain message true/false (defaults to false)
+### GET /publishjms
+Publish a message via JMS using the configured JSON message from `jms.message.json`.
+
+**Features:**
+- Uses Solace JMS with custom properties
+- Includes OpenTelemetry trace context propagation
+- Configurable delay via `jms.delay` property
 
 **Example:**
 ```bash
-curl "http://localhost:8080/api/publish?message=Hello%20World&topic=/test/topic&qos=1&retained=false"
+curl "http://localhost:13579/publishjms"
 ```
 
-### GET /api/config
-Get application configuration and endpoint information.
-
-**Example:**
-```bash
-curl "http://localhost:8080/api/config"
+**Response:**
 ```
+Published JSON to JMS with custom properties.
+```
+
+## OpenTelemetry Integration
+
+Both endpoints include comprehensive OpenTelemetry tracing:
+
+- **Trace Context Propagation**: W3C Trace Context headers are included in message properties
+- **Span Attributes**: Each operation includes relevant attributes (topic, delay, etc.)
+- **Error Handling**: Exceptions are recorded in spans with proper error status
+- **Performance Monitoring**: Built-in timing and performance metrics
 
 ## Running the Application
 
-1. Make sure Solace is running locally on port 1883 (or update the configuration)
-2. Build and run the application:
-   ```bash
-   mvn spring-boot:run
-   ```
-3. The application will start on port 8080
+### Prerequisites
+1. **Solace PubSub+ Broker**: Running on localhost:1883 (MQTT) and localhost:55555 (JMS)
+2. **Java 17+**: Required for Spring Boot 3.x
+3. **Maven 3.6+**: For building the application
+
+### Build and Run
+```bash
+# Build the application
+mvn clean compile
+
+# Run the application
+mvn spring-boot:run
+```
+
+The application will start on port **13579**.
 
 ## Testing
 
-You can test the endpoints using curl or any HTTP client:
+### Basic Testing
+```bash
+# Test MQTT endpoint
+curl "http://localhost:13579/publishmqtt"
+
+# Test JMS endpoint  
+curl "http://localhost:13579/publishjms"
+```
+
+### Testing with Delays
+To make tracing easier to observe, configure delays in `application.properties`:
+
+```properties
+# Add delays for better trace visibility
+mqtt.delay=2000  # 2 second delay for MQTT
+jms.delay=3000   # 3 second delay for JMS
+```
+
+### Docker Deployment
+The application can be deployed using Docker:
 
 ```bash
-# Simple message publish
-curl -X POST "http://localhost:8080/api/publish" -H "Content-Type: application/json" -d "Test message"
+# Build Docker image
+docker build -t hkjc-lm-solace-publisher-mqtt:latest .
 
-# Publish with custom topic
-curl "http://localhost:8080/api/publish?message=Custom%20Message&topic=/custom/topic"
-
-# Get configuration
-curl "http://localhost:8080/api/config"
+# Run with docker-compose (includes OpenTelemetry collector)
+docker-compose up -d
 ```
 
 ## Dependencies
 
-The application uses:
-- Spring Boot Web Starter
-- Spring Integration MQTT
-- Eclipse Paho MQTT Client
+### Core Dependencies
+- **Spring Boot 3.5.6**: Web framework and auto-configuration
+- **Eclipse Paho MQTT v5**: MQTT client with v5 support
+- **Solace JMS**: Native Solace JMS integration
+- **OpenTelemetry**: Distributed tracing and observability
+
+### Key Features
+- **MQTT v5 Support**: User properties and enhanced features
+- **JMS Integration**: Native Solace JMS connectivity
+- **OpenTelemetry Tracing**: Comprehensive observability
+- **Configurable Delays**: For easier trace observation
+- **Docker Support**: Containerized deployment with OpenTelemetry collector
